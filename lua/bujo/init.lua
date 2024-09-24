@@ -11,36 +11,6 @@ function M.date_file(days)
 	)
 end
 
-M.symbol_chain = {
-	["-"] = "->",
-	["->"] = "<-",
-	["<-"] = "(-)",
-	["(-)"] = "+",
-	["+"] = "-",
-}
-
-M.reverse_chain = {}
-for key, val in pairs(M.symbol_chain) do
-	M.reverse_chain[val] = key
-end
-
-function M.replace_symbol(reverse)
-	local symbol_chain = M.symbol_chain
-	if reverse then
-		symbol_chain = M.reverse_chain
-	end
-	local indent, symbol, task = string.match(vim.api.nvim_get_current_line(), M.regex)
-	symbol = string.match(symbol, "^%s*(.+)%s*$")
-	if symbol == nil or symbol_chain[symbol] == nil then
-		return
-	end
-	symbol = symbol_chain[symbol]
-	if string.find(symbol, "[-+]") == 1 then
-		symbol = " " .. symbol
-	end
-	vim.api.nvim_set_current_line(indent .. symbol .. "\t" .. task)
-end
-
 M.default_opts = {
 	path = "~/bujo",
 	default_symbol = "-",
@@ -49,13 +19,96 @@ M.default_opts = {
 	cycle_statuses_keymap = " ",
 	cycle_back_statuses_keymap = "<S- >",
 	create_task_inside_keymap = "bc",
+	symbols = { " - ", " + ", " ->", "<- ", "---", "(-)" },
+	statuses = { "TODO", "DONE", "MIGRATED", "DELEGATED", "DELETED", "IDEA" },
 }
+
+function M.symbol_from_status(status)
+	return M.st2sym[status]
+end
+
+function M.status_from_symbol(symbol)
+	return M.sym2st[symbol]
+end
+
+function M.next_status(status)
+	return M.status_chain[status]
+end
+
+function M.previous_status(status)
+	return M.reverse_chain[status]
+end
+
+function M.next_symbol(symbol)
+	local status = M.status_from_symbol(symbol)
+	local next_status = M.next_status(status)
+	return M.symbol_from_status(next_status)
+end
+
+function M.previous_symbol(symbol)
+	local status = M.status_from_symbol(symbol)
+	local next_status = M.previous_status(status)
+	return M.symbol_from_status(next_status)
+end
+
+function M.format_symbol(symbol)
+	local s, e = string.find(symbol, "[-+]+")
+	if s == 1 and e == 1 then
+		symbol = " " .. symbol
+	end
+	return symbol
+end
+
+function M.replace_symbol(reverse)
+	local indent, symbol, task = string.match(vim.api.nvim_get_current_line(), M.regex)
+	symbol = string.match(symbol, "^%s*(.+)%s*$")
+	if symbol == nil or M.status_chain[M.sym2st[symbol]] == nil then
+		return
+	end
+	if reverse then
+		symbol = M.previous_symbol(symbol)
+	else
+		symbol = M.next_symbol(symbol)
+	end
+
+	symbol = M.format_symbol(symbol)
+
+	vim.api.nvim_set_current_line(indent .. symbol .. "\t" .. task)
+end
 
 function M.setup(opts)
 	opts = vim.tbl_deep_extend("force", M.default_opts, opts or {})
 
 	M.opts = opts
-	M.regex = "^(%s*)([%s<(][-+][>)]?)%s*(.*)$"
+
+	local statuses = M.opts.statuses
+	local symbols = M.opts.symbols
+	M.sym2st = {}
+	M.st2sym = {}
+	for i, status in ipairs(statuses) do
+		local sym = string.gsub(string.gsub(symbols[i], "^%s*", ""), "%s*$", "")
+		M.sym2st[sym] = status
+		M.st2sym[status] = sym
+	end
+
+	M.status_chain = {}
+	M.reverse_chain = {}
+	local prev = statuses[#statuses]
+	for _, status in ipairs(statuses) do
+		M.status_chain[prev] = status
+		M.reverse_chain[status] = prev
+		prev = status
+	end
+
+	local sym_or = ""
+	for _, sym in ipairs(symbols) do
+		if sym_or ~= nil then
+			sym_or = sym_or .. "|"
+		end
+		sym_or = sym_or .. sym
+	end
+
+	M.regex = "^(%s*)([-%s<(][-+][->)]?)%s*(.*)$"
 
 	vim.fn.mkdir(vim.fn.expand(M.opts.path), "p")
 
