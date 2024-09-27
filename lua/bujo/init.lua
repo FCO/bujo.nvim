@@ -151,7 +151,10 @@ end
 
 function M.set_status(status)
 	local task = M.task_from_line(vim.api.nvim_get_current_line())
-	local meta = task.meta
+	local meta = task.meta or {}
+	if meta.changes == nil then
+		meta.changes = {}
+	end
 	table.insert(meta.changes, { time = os.time(), from = task.status, to = status })
 	local new = task:clone({ status = status, meta = meta })
 
