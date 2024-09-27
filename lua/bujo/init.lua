@@ -11,6 +11,7 @@ M.default_opts = {
 	create_task_inside_keymap = "bc",
 	symbols = { " - ", " ÷ ", " + ", " ->", "<- ", "---", "(-)" },
 	statuses = { "TODO", "DOING", "DONE", "MIGRATED", "DELEGATED", "DELETED", "IDEA" },
+	cycle_over_states = { "TODO", "DOING", "DONE" },
 	default_symbol_color = { bold = true, fg = "yellow" },
 	default_line_color = { bold = false, fg = "grey" },
 	symbol_color = {
@@ -85,6 +86,12 @@ function M.new_task(pars, new)
 			return M.new_task(pars, { status = new_status, meta = meta })
 		end,
 		append_to_file = function(self, curr_date_file)
+			for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+				local name = vim.api.nvim_buf_get_name(buf)
+				if vim.fn.expand(name) == vim.fn.expand(curr_date_file) then
+					return vim.api.nvim_buf_set_lines(buf, -1, -1, false, { self:tostring() })
+				end
+			end
 			local file = io.open(curr_date_file, "a+")
 			if file == nil then
 				error("Could not open file")
@@ -111,11 +118,11 @@ function M.status_from_symbol(symbol)
 end
 
 function M.next_status(status)
-	return M.status_chain[status]
+	return M.status_chain[status] or M.opts.statuses[1]
 end
 
 function M.previous_status(status)
-	return M.reverse_chain[status]
+	return M.reverse_chain[status] or M.opts.statuses[1]
 end
 
 function M.next_symbol(symbol)
@@ -144,7 +151,9 @@ end
 
 function M.set_status(status)
 	local task = M.task_from_line(vim.api.nvim_get_current_line())
-	local new = task:clone({ status = status })
+	local meta = task.meta
+	table.insert(meta.changes, { time = os.time(), from = task.status, to = status })
+	local new = task:clone({ status = status, meta = meta })
 
 	vim.api.nvim_set_current_line(new:tostring())
 end
@@ -166,8 +175,9 @@ function M.setup(opts)
 
 	M.status_chain = {}
 	M.reverse_chain = {}
-	local prev = statuses[#statuses]
-	for _, status in ipairs(statuses) do
+	local cycle_over = M.opts.cycle_over_states
+	local prev = cycle_over[#cycle_over]
+	for _, status in ipairs(cycle_over) do
 		M.status_chain[prev] = status
 		M.reverse_chain[status] = prev
 		prev = status
@@ -207,18 +217,12 @@ function M.setup(opts)
 	vim.api.nvim_create_user_command("BujoCreateEntry", function()
 		vim.ui.input({ prompt = "entry a new task:" }, function(task)
 			if not task then
+				vim.notify("No task entred", vim.log.WARN)
 				return
 			end
 
 			local curr_date_file = M.date_file()
 			M.new_task({ value = task }):append_to_file(curr_date_file)
-			if vim.fn.resolve(curr_date_file) == vim.fn.resolve(vim.api.nvim_buf_get_name(0)) then
-				if vim.bo.modified then
-					vim.notify("Buffer modified, not updating...", vim.log.ERROR)
-					return
-				end
-				vim.cmd.edit()
-			end
 		end)
 	end, { bang = true })
 end
