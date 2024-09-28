@@ -42,7 +42,10 @@ vim.api.nvim_buf_create_user_command(0, "BujoPreviousSymbol", function()
 	bujo.replace_symbol(true)
 end, { bang = true })
 
-vim.api.nvim_buf_create_user_command(0, "BujoSetSymbol", function()
+vim.api.nvim_buf_create_user_command(0, "BujoSetSymbol", function(opts)
+	if opts.args ~= "" then
+		return bujo.set_status(opts.args)
+	end
 	vim.ui.select(bujo.opts.statuses, {
 		prompt = "Chose status/symbol",
 		format_item = function(status)
@@ -52,7 +55,7 @@ vim.api.nvim_buf_create_user_command(0, "BujoSetSymbol", function()
 	}, function(status)
 		bujo.set_status(status)
 	end)
-end, { bang = true })
+end, { bang = true, nargs = "?" })
 
 vim.api.nvim_buf_set_keymap(
 	0,

@@ -20,7 +20,15 @@ M.default_opts = {
 	},
 }
 
-function M.task_from_line(line)
+function M.task_from_buffer_and_line_number(buf, line_number)
+	local line = vim.api.nvim_buf_get_lines(buf, line_number, line_number + 1, false)
+	local file = vim.api.nvim_buf_get_name(buf)
+
+	return M.task_from_line(line[1], { line = line_number, line_end = line_number + 1, buf = buf, file = file })
+end
+
+function M.task_from_line(line, pars)
+	pars = pars or {}
 	local symbol = ""
 	local indent = ""
 
@@ -43,13 +51,19 @@ function M.task_from_line(line)
 
 	local meta = string.match(line, "({.*})$", #indent + #symbol)
 
-	return M.new_task({
+	local line_number = unpack(vim.api.nvim_win_get_cursor(0))
+	local all_pars = vim.tbl_deep_extend("force", {
+		line = line_number,
+		line_end = line_number + 1,
 		indent = indent,
+		file = vim.fn.expand("%:p"),
+		buf = 0,
 		symbol = symbol,
 		status = M.status_from_symbol(symbol),
 		value = value,
 		meta = meta,
-	})
+	}, pars)
+	return M.new_task(all_pars)
 end
 
 function M.new_task(pars, new)
@@ -64,12 +78,23 @@ function M.new_task(pars, new)
 	else
 		meta = oldmeta
 	end
+	if pars.line and pars.line_end ~= nil then
+		if pars.line == -1 then
+			pars.line_end = -1
+		else
+			pars.line_end = pars.line + 1
+		end
+	end
 	return {
 		indent = pars.indent or "",
 		status = status,
 		symbol = M.symbol_from_status(status),
 		value = pars.value or "",
 		meta = meta,
+		buf = pars.buf,
+		file = pars.file,
+		line = pars.line or -1,
+		line_end = pars.line_end or -1,
 		tostring = function(self)
 			return self.indent .. self.symbol .. "\t" .. self.value .. "\t\t" .. vim.json.encode(self.meta)
 		end,
@@ -85,21 +110,56 @@ function M.new_task(pars, new)
 			table.insert(meta.changes, { time = os.time(), from = self.status, to = status })
 			return M.new_task(pars, { status = new_status, meta = meta })
 		end,
-		append_to_file = function(self, curr_date_file)
+		buffer_is_opened = function(self)
+			if self.buf and vim.api.nvim_buf_is_loaded(self.buf) then
+				local name = vim.api.nvim_buf_get_name(self.buf)
+				return vim.fn.expand(name) == vim.fn.expand(self.file)
+			end
+			return false
+		end,
+		fix_buffer = function(self)
 			for _, buf in ipairs(vim.api.nvim_list_bufs()) do
 				local name = vim.api.nvim_buf_get_name(buf)
-				if vim.fn.expand(name) == vim.fn.expand(curr_date_file) then
-					return vim.api.nvim_buf_set_lines(buf, -1, -1, false, { self:tostring() })
+				if vim.fn.expand(name) == vim.fn.expand(self.file) then
+					return self:clone({ buf = buf })
 				end
 			end
-			local file = io.open(curr_date_file, "a+")
+		end,
+		append_to_file = function(self)
+			self = self:clone({ line = -1, line_end = -1 })
+			if self:buffer_is_opened() then
+				self:write()
+			end
+
+			local fixed = self:fix_buffer()
+			if fixed then
+				return fixed:write()
+			end
+
+			local file = io.open(self.file, "a+")
 			if file == nil then
 				error("Could not open file")
 			end
 			file:write(self:tostring() .. "\n")
 			io.close(file)
+			vim.notify("File '" .. self.file .. "' appended", vim.log.levels.INFO)
+
+			return self:clone({ buf = nil })
 		end,
 		clone = M.new_task,
+		write = function(self)
+			local line = self.line
+			local line_end = self.line_end
+			if line > 0 then
+				line = line - 1
+			end
+			if line_end > 0 then
+				line_end = line_end - 1
+			end
+			vim.api.nvim_buf_set_lines(self.buf, line, line_end, false, { self:tostring() })
+			vim.notify("Appended to buffer '" .. self.file .. "'", vim.log.levels.INFO)
+			return self
+		end,
 	}
 end
 
@@ -146,7 +206,7 @@ function M.replace_symbol(reverse)
 		new = task:next()
 	end
 
-	vim.api.nvim_set_current_line(new:tostring())
+	new:write()
 end
 
 function M.set_status(status)
@@ -224,8 +284,7 @@ function M.setup(opts)
 				return
 			end
 
-			local curr_date_file = M.date_file()
-			M.new_task({ value = task }):append_to_file(curr_date_file)
+			M.new_task({ value = task, file = M.date_file() }):append_to_file()
 		end)
 	end, { bang = true })
 end
