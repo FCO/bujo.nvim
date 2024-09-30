@@ -13,12 +13,39 @@ M.default_opts = {
 	statuses = { "TODO", "DOING", "DONE", "MIGRATED", "DELEGATED", "DELETED", "IDEA" },
 	cycle_over_states = { "TODO", "DOING", "DONE" },
 	default_symbol_color = { bold = true, fg = "yellow" },
-	default_line_color = { bold = false, fg = "grey" },
+	default_line_color = { bold = false, italic = true, fg = "grey" },
 	symbol_color = {
 		DONE = { bold = true, fg = "green" },
 		DELETED = { bold = false, fg = "red" },
 	},
 }
+
+function M.inbox_files()
+	return vim.split(vim.fn.glob(M.opts.path .. "/**/*.bujo"), "\n")
+end
+
+function M.prepare_inbox()
+	local inbox_file = M.opts.path .. "/INBOX.bujo"
+	local inbox = vim.api.nvim_create_buf(true, true)
+	vim.api.nvim_buf_set_name(inbox, inbox_file)
+	vim.api.nvim_win_set_buf(0, inbox)
+	for _, file in ipairs(M.inbox_files()) do
+		local buf = vim.api.nvim_create_buf(true, false)
+		vim.api.nvim_buf_set_name(buf, file)
+		vim.api.nvim_buf_call(buf, vim.cmd.edit)
+		local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+		for i, line in ipairs(lines) do
+			local task = M.task_from_line(line, { file = file, line = i - 1 })
+			if task.status == "TODO" or task.status == "DOING" then
+				local clone =
+					task:clone_with_orig({ file = inbox_file, line = -1, line_end = -1, buf = inbox, silent = true })
+				clone:append_to_file()
+			end
+		end
+		vim.api.nvim_buf_delete(buf, {})
+	end
+	vim.o.filetype = "bujo"
+end
 
 function M.task_from_buffer_and_line_number(buf, line_number)
 	local line = vim.api.nvim_buf_get_lines(buf, line_number, line_number + 1, false)
@@ -72,11 +99,15 @@ function M.new_task(pars, new)
 	local oldmeta = pars.meta or {
 		created_at = os.date("%H:%M:%S"),
 	}
+	local orig_pars = pars.orig_pars or pars.meta and pars.meta.orig_pars
 	local meta
 	if type(oldmeta) == "string" then
 		meta = vim.json.decode(oldmeta)
 	else
 		meta = oldmeta
+	end
+	if meta then
+		meta.orig_pars = nil
 	end
 	if pars.line and pars.line_end ~= nil then
 		if pars.line == -1 then
@@ -85,7 +116,16 @@ function M.new_task(pars, new)
 			pars.line_end = pars.line + 1
 		end
 	end
+	local auto_save = false
+	if pars.auto_save ~= nil then
+		auto_save = pars.auto_save
+	end
+	local auto_close = false
+	if pars.auto_close ~= nil then
+		auto_close = pars.auto_close
+	end
 	return {
+		silent = pars.silent or false,
 		indent = pars.indent or "",
 		status = status,
 		symbol = M.symbol_from_status(status),
@@ -94,8 +134,13 @@ function M.new_task(pars, new)
 		buf = pars.buf,
 		file = pars.file,
 		line = pars.line or -1,
+		orig_pars = orig_pars,
 		line_end = pars.line_end or -1,
+		auto_save = auto_save,
+		auto_close = auto_close,
 		tostring = function(self)
+			local meta = self.meta
+			meta.orig_pars = self.orig_pars
 			return self.indent .. self.symbol .. "\t" .. self.value .. "\t\t" .. vim.json.encode(self.meta)
 		end,
 		next = function(self)
@@ -118,35 +163,38 @@ function M.new_task(pars, new)
 			return false
 		end,
 		fix_buffer = function(self)
+			if self:buffer_is_opened() then
+				return self
+			end
 			for _, buf in ipairs(vim.api.nvim_list_bufs()) do
 				local name = vim.api.nvim_buf_get_name(buf)
 				if vim.fn.expand(name) == vim.fn.expand(self.file) then
-					return self:clone({ buf = buf })
+					return self:clone({ auto_close = false, buf = buf })
 				end
 			end
+			return self:create_buffer()
+		end,
+		create_buffer = function(self)
+			local buf = vim.api.nvim_create_buf(false, false)
+			vim.api.nvim_buf_set_name(buf, self.file)
+			return self:clone({ buf = buf, auto_save = true, auto_close = true })
 		end,
 		append_to_file = function(self)
 			self = self:clone({ line = -1, line_end = -1 })
-			if self:buffer_is_opened() then
-				self:write()
-			end
-
-			local fixed = self:fix_buffer()
-			if fixed then
-				return fixed:write()
-			end
-
-			local file = io.open(self.file, "a+")
-			if file == nil then
-				error("Could not open file")
-			end
-			file:write(self:tostring() .. "\n")
-			io.close(file)
-			vim.notify("File '" .. self.file .. "' appended", vim.log.levels.INFO)
-
-			return self:clone({ buf = nil })
+			return self:write()
 		end,
 		clone = M.new_task,
+		clone_with_orig = function(self, new_pars)
+			local o_pars = {}
+			for key in pairs(new_pars) do
+				o_pars[key] = self[key]
+			end
+			new_pars.orig_pars = o_pars
+			return self:clone(new_pars)
+		end,
+		origin = function(self)
+			self:clone(self.orig_pars or {})
+		end,
 		write = function(self)
 			local line = self.line
 			local line_end = self.line_end
@@ -156,8 +204,23 @@ function M.new_task(pars, new)
 			if line_end > 0 then
 				line_end = line_end - 1
 			end
+
+			self = self:fix_buffer()
+
+			-- print(vim.api.nvim_buf_get_name(self.buf))
 			vim.api.nvim_buf_set_lines(self.buf, line, line_end, false, { self:tostring() })
-			vim.notify("Appended to buffer '" .. self.file .. "'", vim.log.levels.INFO)
+			if not self.silent then
+				vim.notify("Appended to buffer '" .. self.file .. "'", vim.log.levels.INFO)
+			end
+
+			if self.auto_save then
+				vim.api.nvim_buf_call(self.buf, function()
+					vim.cmd.write({ self.file, bang = true })
+				end)
+			end
+			if self.auto_close then
+				vim.api.nvim_buf_delete(self.buf, {})
+			end
 			return self
 		end,
 	}
@@ -286,6 +349,21 @@ function M.setup(opts)
 
 			M.new_task({ value = task, file = M.date_file() }):append_to_file()
 		end)
+	end, { bang = true })
+
+	vim.api.nvim_create_user_command("BujoCreateEntryCurrentBuffer", function()
+		vim.ui.input({ prompt = "entry a new task:" }, function(task)
+			if not task then
+				vim.notify("No task entred", vim.log.WARN)
+				return
+			end
+
+			M.new_task({ value = task, file = vim.api.nvim_buf_get_name(0) }):append_to_file()
+		end)
+	end, { bang = true })
+
+	vim.api.nvim_create_user_command("BujoReviewInbox", function()
+		M.prepare_inbox()
 	end, { bang = true })
 end
 

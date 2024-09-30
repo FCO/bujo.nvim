@@ -13,7 +13,7 @@ for _, status in ipairs(bujo.opts.statuses) do
 	vim.api.nvim_set_hl(0, "BujoBullet" .. status, color)
 end
 
-vim.api.nvim_set_hl(0, "BujoValue", { bold = true, fg = "grey" })
+vim.api.nvim_set_hl(0, "BujoValue", bujo.opts.default_line_color)
 vim.cmd.syntax("match", "BujoValue", "/\\s\\+[^{]*/ contained nextgroup=BujoDetails")
 
 vim.cmd.syntax("match", "BujoLine", "/^.*$/")
@@ -77,7 +77,7 @@ vim.api.nvim_buf_set_keymap(
 	0,
 	"n",
 	bujo.opts.create_task_inside_keymap,
-	":BujoCreateEntry<CR>",
+	":BujoCreateEntryCurrentBuffer<CR>",
 	{ silent = true, noremap = true, desc = "Create Bujo task" }
 )
 
