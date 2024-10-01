@@ -24,26 +24,47 @@ function M.inbox_files()
 	return vim.split(vim.fn.glob(M.opts.path .. "/**/*.bujo"), "\n")
 end
 
+function M.tasks_from_buffer_lines(buf, start, _end, file)
+	if buf == nil then
+		buf = 0
+	end
+	if start == nil then
+		start = 0
+	end
+	if _end == nil then
+		_end = -1
+	end
+	if file == nil then
+		file = vim.api.nvim_buf_get_name(buf)
+	end
+	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+	local tasks = {}
+	for i, line in ipairs(lines) do
+		table.insert(tasks, M.task_from_line(line, { file = file, line = i - 1 }))
+	end
+	return tasks
+end
+
 function M.prepare_inbox()
 	local inbox_file = M.opts.path .. "/INBOX.bujo"
-	local inbox = vim.api.nvim_create_buf(true, true)
-	vim.api.nvim_buf_set_name(inbox, inbox_file)
+	local _, inbox = M.find_or_create_buffer(inbox_file, true, true)
 	vim.api.nvim_win_set_buf(0, inbox)
 	for _, file in ipairs(M.inbox_files()) do
-		local buf = vim.api.nvim_create_buf(true, false)
-		vim.api.nvim_buf_set_name(buf, file)
+		local newBuf, buf = M.find_or_create_buffer(file)
 		vim.api.nvim_buf_call(buf, vim.cmd.edit)
-		local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
-		for i, line in ipairs(lines) do
-			local task = M.task_from_line(line, { file = file, line = i - 1 })
+		local tasks = M.tasks_from_buffer_lines(buf, 0, -1, file)
+		for _, task in ipairs(tasks) do
 			if task.status == "TODO" or task.status == "DOING" then
 				local clone =
 					task:clone_with_orig({ file = inbox_file, line = -1, line_end = -1, buf = inbox, silent = true })
 				clone:append_to_file()
 			end
 		end
-		vim.api.nvim_buf_delete(buf, {})
+		if newBuf then
+			vim.api.nvim_buf_delete(buf, {})
+		end
 	end
+	vim.api.nvim_set_option_value("modified", false, { buf = 0 })
 	vim.o.filetype = "bujo"
 end
 
@@ -91,6 +112,18 @@ function M.task_from_line(line, pars)
 		meta = meta,
 	}, pars)
 	return M.new_task(all_pars)
+end
+
+function M.find_or_create_buffer(file, listed, scrtched)
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		local name = vim.api.nvim_buf_get_name(buf)
+		if vim.fn.expand(name) == vim.fn.expand(file) then
+			return false, buf
+		end
+	end
+	local buf = vim.api.nvim_create_buf(listed or false, scrtched or false)
+	vim.api.nvim_buf_set_name(buf, file)
+	return true, buf
 end
 
 function M.new_task(pars, new)
@@ -166,16 +199,13 @@ function M.new_task(pars, new)
 			if self:buffer_is_opened() then
 				return self
 			end
-			for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-				local name = vim.api.nvim_buf_get_name(buf)
-				if vim.fn.expand(name) == vim.fn.expand(self.file) then
-					return self:clone({ auto_close = false, buf = buf })
-				end
-			end
 			return self:create_buffer()
 		end,
 		create_buffer = function(self)
-			local buf = vim.api.nvim_create_buf(false, false)
+			local newBuf, buf = M.find_or_create_buffer(self.file)
+			if not newBuf then
+				return self:clone({ auto_close = false, buf = buf })
+			end
 			vim.api.nvim_buf_set_name(buf, self.file)
 			return self:clone({ buf = buf, auto_save = true, auto_close = true })
 		end,

@@ -25,6 +25,22 @@ for symbol, status in pairs(bujo.sym2st) do
 	)
 end
 
+local grp = vim.api.nvim_create_augroup("bujo_auto_cmd", { clear = true })
+vim.api.nvim_create_autocmd("BufWriteCmd", {
+	pattern = "INBOX.bujo",
+	group = grp,
+	callback = function()
+		print("saving INBOX")
+		local tasks = bujo.tasks_from_buffer_lines()
+		for _, task in ipairs(tasks) do
+			if task.orig_pars then
+				task:origin():write()
+			end
+		end
+		vim.api.nvim_set_option_value("modified", false, { buf = 0 })
+	end,
+})
+
 vim.cmd.syntax("conceal", "on")
 vim.api.nvim_set_hl(0, "BujoDetails", { bold = true, fg = "grey" })
 vim.cmd.syntax("match", "BujoDetails", "/\\s*{.*}/ contained")
