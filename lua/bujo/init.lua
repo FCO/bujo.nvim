@@ -9,6 +9,7 @@ M.default_opts = {
 	cycle_back_statuses_keymap = "<S-Tab>",
 	set_status_keymap = "<Tab><Tab>",
 	create_task_inside_keymap = "bc",
+	follow_keymap = "bf",
 	symbols = { " - ", " ÷ ", " + ", " ->", "<- ", "---", "(-)" },
 	statuses = { "TODO", "DOING", "DONE", "MIGRATED", "DELEGATED", "DELETED", "IDEA" },
 	cycle_over_states = { "TODO", "DOING", "DONE" },
@@ -40,14 +41,16 @@ function M.tasks_from_buffer_lines(buf, start, _end, file)
 	local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
 	local tasks = {}
 	for i, line in ipairs(lines) do
-		table.insert(tasks, M.task_from_line(line, { file = file, line = i - 1 }))
+		if line ~= nil and line ~= "" then
+			table.insert(tasks, M.task_from_line(line, { file = file, line = i - 1 }))
+		end
 	end
 	return tasks
 end
 
 function M.prepare_inbox()
 	local inbox_file = M.opts.path .. "/INBOX.bujo"
-	local _, inbox = M.find_or_create_buffer(inbox_file, true, true)
+	local _, inbox = M.find_or_create_buffer(inbox_file, true, false)
 	vim.api.nvim_win_set_buf(0, inbox)
 	for _, file in ipairs(M.inbox_files()) do
 		local newBuf, buf = M.find_or_create_buffer(file)
@@ -55,8 +58,13 @@ function M.prepare_inbox()
 		local tasks = M.tasks_from_buffer_lines(buf, 0, -1, file)
 		for _, task in ipairs(tasks) do
 			if task.status == "TODO" or task.status == "DOING" then
-				local clone =
-					task:clone_with_orig({ file = inbox_file, line = -1, line_end = -1, buf = inbox, silent = true })
+				local clone = task:clone_with_orig({
+					file = inbox_file,
+					line = -1,
+					line_end = -1,
+					buf = inbox,
+					silent = true,
+				})
 				clone:append_to_file()
 			end
 		end
@@ -80,6 +88,10 @@ function M.task_from_line(line, pars)
 	local symbol = ""
 	local indent = ""
 
+	if line == nil or line == "" then
+		error("Not a task", vim.log.levels.ERROR)
+		return nil
+	end
 	for _, sym in ipairs(M.opts.symbols) do
 		local s = string.find(line, sym, 1, true)
 		if s and (s == 1 or string.find(string.sub(line, s - 1), "^%s*$")) then
@@ -132,12 +144,17 @@ function M.new_task(pars, new)
 	local oldmeta = pars.meta or {
 		created_at = os.date("%H:%M:%S"),
 	}
-	local orig_pars = pars.orig_pars or pars.meta and pars.meta.orig_pars
 	local meta
 	if type(oldmeta) == "string" then
 		meta = vim.json.decode(oldmeta)
 	else
 		meta = oldmeta
+	end
+	local orig_pars = pars.orig_pars
+	if orig_pars == nil then
+		if meta ~= nil then
+			orig_pars = meta.orig_pars
+		end
 	end
 	if meta then
 		meta.orig_pars = nil
@@ -177,16 +194,18 @@ function M.new_task(pars, new)
 			return self.indent .. self.symbol .. "\t" .. self.value .. "\t\t" .. vim.json.encode(self.meta)
 		end,
 		next = function(self)
+			local _meta = self.meta
 			local new_status = M.next_status(self.status)
-			meta.changes = meta.changes or {}
-			table.insert(meta.changes, { time = os.time(), from = self.status, to = new_status })
-			return M.new_task(pars, { status = new_status, meta = meta })
+			_meta.changes = _meta.changes or {}
+			table.insert(_meta.changes, { time = os.time(), from = self.status, to = new_status })
+			return self:clone({ status = new_status, meta = _meta })
 		end,
 		previous = function(self)
+			local _meta = self.meta
 			local new_status = M.previous_status(self.status)
-			meta.changes = meta.changes or {}
-			table.insert(meta.changes, { time = os.time(), from = self.status, to = status })
-			return M.new_task(pars, { status = new_status, meta = meta })
+			_meta.changes = _meta.changes or {}
+			table.insert(_meta.changes, { time = os.time(), from = self.status, to = new_status })
+			return self:clone({ status = new_status, meta = _meta })
 		end,
 		buffer_is_opened = function(self)
 			if self.buf and vim.api.nvim_buf_is_loaded(self.buf) then
@@ -209,6 +228,13 @@ function M.new_task(pars, new)
 			vim.api.nvim_buf_set_name(buf, self.file)
 			return self:clone({ buf = buf, auto_save = true, auto_close = true })
 		end,
+		follow = function(self)
+			local orig = self:origin()
+			local _, buf = M.find_or_create_buffer(orig.file, true, false)
+			vim.api.nvim_win_set_buf(0, buf)
+			vim.cmd.edit()
+			vim.api.nvim_win_set_cursor(0, { orig.line, 0 })
+		end,
 		append_to_file = function(self)
 			self = self:clone({ line = -1, line_end = -1 })
 			return self:write()
@@ -218,12 +244,20 @@ function M.new_task(pars, new)
 			local o_pars = {}
 			for key in pairs(new_pars) do
 				o_pars[key] = self[key]
+				if key == "line" or key == "line_end" then
+					o_pars[key] = o_pars[key] + 1
+				end
 			end
 			new_pars.orig_pars = o_pars
 			return self:clone(new_pars)
 		end,
+		has_origin = function(self)
+			return self.orig_pars ~= nil
+		end,
 		origin = function(self)
-			self:clone(self.orig_pars or {})
+			local clone = self:clone(self.orig_pars or {})
+			clone.orig_pars = nil
+			return clone
 		end,
 		write = function(self)
 			local line = self.line
@@ -237,7 +271,6 @@ function M.new_task(pars, new)
 
 			self = self:fix_buffer()
 
-			-- print(vim.api.nvim_buf_get_name(self.buf))
 			vim.api.nvim_buf_set_lines(self.buf, line, line_end, false, { self:tostring() })
 			if not self.silent then
 				vim.notify("Appended to buffer '" .. self.file .. "'", vim.log.levels.INFO)

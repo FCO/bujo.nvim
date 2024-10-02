@@ -30,10 +30,9 @@ vim.api.nvim_create_autocmd("BufWriteCmd", {
 	pattern = "INBOX.bujo",
 	group = grp,
 	callback = function()
-		print("saving INBOX")
 		local tasks = bujo.tasks_from_buffer_lines()
 		for _, task in ipairs(tasks) do
-			if task.orig_pars then
+			if task:has_origin() then
 				task:origin():write()
 			end
 		end
@@ -47,7 +46,11 @@ vim.cmd.syntax("match", "BujoDetails", "/\\s*{.*}/ contained")
 vim.cmd.syntax("conceal", "off")
 
 vim.api.nvim_buf_create_user_command(0, "BujoCurrentTask", function()
-	print(bujo.task_from_line(vim.api.nvim_get_current_line()))
+	print(vim.inspect(bujo.task_from_line(vim.api.nvim_get_current_line())))
+end, { bang = true })
+
+vim.api.nvim_buf_create_user_command(0, "BujoFollowOrigin", function()
+	bujo.task_from_line(vim.api.nvim_get_current_line()):follow()
 end, { bang = true })
 
 vim.api.nvim_buf_create_user_command(0, "BujoNextSymbol", function()
@@ -103,4 +106,12 @@ vim.api.nvim_buf_set_keymap(
 	bujo.opts.set_status_keymap,
 	":BujoSetSymbol<CR>",
 	{ silent = true, noremap = true, desc = "Set symbol on current line" }
+)
+
+vim.api.nvim_buf_set_keymap(
+	0,
+	"n",
+	bujo.opts.follow_keymap,
+	":BujoFollowOrigin<CR>",
+	{ silent = true, noremap = true, desc = "Follow task origin" }
 )
