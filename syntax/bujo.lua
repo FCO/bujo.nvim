@@ -1,8 +1,9 @@
 local bujo = require("bujo")
 
-vim.o.list = false
-vim.o.number = false
-vim.o.relativenumber = false
+vim.wo.list = false
+vim.wo.number = false
+vim.wo.relativenumber = false
+vim.wo.wrap = false
 
 for _, status in ipairs(bujo.opts.statuses) do
 	local color = bujo.opts.default_symbol_color
@@ -26,14 +27,14 @@ for symbol, status in pairs(bujo.sym2st) do
 end
 
 local grp = vim.api.nvim_create_augroup("bujo_auto_cmd", { clear = true })
-vim.api.nvim_create_autocmd("BufWriteCmd", {
-	pattern = "INBOX.bujo",
+vim.api.nvim_create_autocmd("BufWritePost", {
+	pattern = "*.bujo",
 	group = grp,
 	callback = function()
 		local tasks = bujo.tasks_from_buffer_lines()
 		for _, task in ipairs(tasks) do
 			if task:has_origin() then
-				task:origin():write()
+				task:origin({ status = "MIGRATED" }):write()
 			end
 		end
 		vim.api.nvim_set_option_value("modified", false, { buf = 0 })
@@ -41,7 +42,7 @@ vim.api.nvim_create_autocmd("BufWriteCmd", {
 })
 
 vim.cmd.syntax("conceal", "on")
-vim.api.nvim_set_hl(0, "BujoDetails", { bold = true, fg = "grey" })
+vim.api.nvim_set_hl(0, "BujoDetails", { bold = false, fg = "grey" })
 vim.cmd.syntax("match", "BujoDetails", "/\\s*{.*}/ contained")
 vim.cmd.syntax("conceal", "off")
 
@@ -53,13 +54,25 @@ vim.api.nvim_buf_create_user_command(0, "BujoFollowOrigin", function()
 	bujo.task_from_line(vim.api.nvim_get_current_line()):follow()
 end, { bang = true })
 
-vim.api.nvim_buf_create_user_command(0, "BujoNextSymbol", function()
-	bujo.replace_symbol()
-end, { bang = true })
+vim.api.nvim_buf_create_user_command(0, "BujoNextSymbol", function(args)
+	if args.range > 0 then
+		for line = args.line1, args.line2 do
+			bujo.replace_symbol(false, 0, line - 1)
+		end
+	else
+		bujo.replace_symbol()
+	end
+end, { bang = true, range = true })
 
-vim.api.nvim_buf_create_user_command(0, "BujoPreviousSymbol", function()
-	bujo.replace_symbol(true)
-end, { bang = true })
+vim.api.nvim_buf_create_user_command(0, "BujoPreviousSymbol", function(args)
+	if args.range > 0 then
+		for line = args.line1, args.line2 do
+			bujo.replace_symbol(true, 0, line - 1)
+		end
+	else
+		bujo.replace_symbol()
+	end
+end, { bang = true, range = true })
 
 vim.api.nvim_buf_create_user_command(0, "BujoSetSymbol", function(opts)
 	if opts.args ~= "" then
@@ -89,6 +102,22 @@ vim.api.nvim_buf_set_keymap(
 	"n",
 	bujo.opts.cycle_back_statuses_keymap,
 	":BujoPreviousSymbol<CR>",
+	{ silent = true, noremap = true, desc = "Rotate back Bujo symbols" }
+)
+
+vim.api.nvim_buf_set_keymap(
+	0,
+	"v",
+	bujo.opts.cycle_statuses_keymap,
+	":'<,'>BujoNextSymbol<CR>",
+	{ silent = true, noremap = true, desc = "Rotate Bujo symbols" }
+)
+
+vim.api.nvim_buf_set_keymap(
+	0,
+	"v",
+	bujo.opts.cycle_back_statuses_keymap,
+	":'<,'>BujoPreviousSymbol<CR>",
 	{ silent = true, noremap = true, desc = "Rotate back Bujo symbols" }
 )
 

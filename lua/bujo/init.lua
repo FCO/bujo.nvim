@@ -49,27 +49,30 @@ function M.tasks_from_buffer_lines(buf, start, _end, file)
 end
 
 function M.prepare_inbox()
-	local inbox_file = M.opts.path .. "/INBOX.bujo"
+	local inbox_file = M.date_file()
 	local _, inbox = M.find_or_create_buffer(inbox_file, true, false)
 	vim.api.nvim_win_set_buf(0, inbox)
+	vim.cmd.edit()
 	for _, file in ipairs(M.inbox_files()) do
-		local newBuf, buf = M.find_or_create_buffer(file)
-		vim.api.nvim_buf_call(buf, vim.cmd.edit)
-		local tasks = M.tasks_from_buffer_lines(buf, 0, -1, file)
-		for _, task in ipairs(tasks) do
-			if task.status == "TODO" or task.status == "DOING" then
-				local clone = task:clone_with_orig({
-					file = inbox_file,
-					line = -1,
-					line_end = -1,
-					buf = inbox,
-					silent = true,
-				})
-				clone:append_to_file()
+		if file < inbox_file then
+			local newBuf, buf = M.find_or_create_buffer(file)
+			vim.api.nvim_buf_call(buf, vim.cmd.edit)
+			local tasks = M.tasks_from_buffer_lines(buf, 0, -1, file)
+			for _, task in ipairs(tasks) do
+				if task.status == "TODO" or task.status == "DOING" then
+					local clone = task:clone_with_orig({
+						file = inbox_file,
+						line = -1,
+						line_end = -1,
+						buf = inbox,
+						silent = true,
+					})
+					clone:append_to_file()
+				end
 			end
-		end
-		if newBuf then
-			vim.api.nvim_buf_delete(buf, {})
+			if newBuf then
+				vim.api.nvim_buf_delete(buf, {})
+			end
 		end
 	end
 	vim.api.nvim_set_option_value("modified", false, { buf = 0 })
@@ -80,7 +83,7 @@ function M.task_from_buffer_and_line_number(buf, line_number)
 	local line = vim.api.nvim_buf_get_lines(buf, line_number, line_number + 1, false)
 	local file = vim.api.nvim_buf_get_name(buf)
 
-	return M.task_from_line(line[1], { line = line_number, line_end = line_number + 1, buf = buf, file = file })
+	return M.task_from_line(line[1], { line = line_number + 1, line_end = line_number + 2, buf = buf, file = file })
 end
 
 function M.task_from_line(line, pars)
@@ -174,6 +177,9 @@ function M.new_task(pars, new)
 	if pars.auto_close ~= nil then
 		auto_close = pars.auto_close
 	end
+	if pars.silent == nil then
+		pars.silent = true
+	end
 	return {
 		silent = pars.silent or false,
 		indent = pars.indent or "",
@@ -196,6 +202,9 @@ function M.new_task(pars, new)
 		next = function(self)
 			local _meta = self.meta
 			local new_status = M.next_status(self.status)
+			if new_status == nil then
+				return
+			end
 			_meta.changes = _meta.changes or {}
 			table.insert(_meta.changes, { time = os.time(), from = self.status, to = new_status })
 			return self:clone({ status = new_status, meta = _meta })
@@ -203,6 +212,9 @@ function M.new_task(pars, new)
 		previous = function(self)
 			local _meta = self.meta
 			local new_status = M.previous_status(self.status)
+			if new_status == nil then
+				return
+			end
 			_meta.changes = _meta.changes or {}
 			table.insert(_meta.changes, { time = os.time(), from = self.status, to = new_status })
 			return self:clone({ status = new_status, meta = _meta })
@@ -254,10 +266,10 @@ function M.new_task(pars, new)
 		has_origin = function(self)
 			return self.orig_pars ~= nil
 		end,
-		origin = function(self)
+		origin = function(self, change)
 			local clone = self:clone(self.orig_pars or {})
 			clone.orig_pars = nil
-			return clone
+			return clone:clone(change)
 		end,
 		write = function(self)
 			local line = self.line
@@ -273,7 +285,7 @@ function M.new_task(pars, new)
 
 			vim.api.nvim_buf_set_lines(self.buf, line, line_end, false, { self:tostring() })
 			if not self.silent then
-				vim.notify("Appended to buffer '" .. self.file .. "'", vim.log.levels.INFO)
+				vim.notify("Written to buffer '" .. self.file .. "'", vim.log.levels.INFO)
 			end
 
 			if self.auto_save then
@@ -304,11 +316,11 @@ function M.status_from_symbol(symbol)
 end
 
 function M.next_status(status)
-	return M.status_chain[status] or M.opts.statuses[1]
+	return M.status_chain[status]
 end
 
 function M.previous_status(status)
-	return M.reverse_chain[status] or M.opts.statuses[1]
+	return M.reverse_chain[status]
 end
 
 function M.next_symbol(symbol)
@@ -323,13 +335,22 @@ function M.previous_symbol(symbol)
 	return M.symbol_from_status(next_status)
 end
 
-function M.replace_symbol(reverse)
-	local task = M.task_from_line(vim.api.nvim_get_current_line())
+function M.replace_symbol(reverse, buf, line_number)
+	local task
+	if line_number ~= nil then
+		task = M.task_from_buffer_and_line_number(buf, line_number)
+	else
+		task = M.task_from_line(vim.api.nvim_get_current_line())
+	end
 	local new
 	if reverse then
 		new = task:previous()
 	else
 		new = task:next()
+	end
+
+	if new == nil then
+		return
 	end
 
 	new:write()
@@ -365,10 +386,12 @@ function M.setup(opts)
 	M.status_chain = {}
 	M.reverse_chain = {}
 	local cycle_over = M.opts.cycle_over_states
-	local prev = cycle_over[#cycle_over]
+	local prev
 	for _, status in ipairs(cycle_over) do
-		M.status_chain[prev] = status
-		M.reverse_chain[status] = prev
+		if prev ~= nil then
+			M.status_chain[prev] = status
+			M.reverse_chain[status] = prev
+		end
 		prev = status
 	end
 
@@ -394,7 +417,7 @@ function M.setup(opts)
 	vim.api.nvim_set_keymap(
 		"n",
 		M.opts.open_today_keymap,
-		":BujoOpenTodaysFile<CR>",
+		":BujoReviewInbox<CR>",
 		{ silent = true, noremap = true, desc = "Open today's file" }
 	)
 
