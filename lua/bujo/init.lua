@@ -10,8 +10,9 @@ M.default_opts = {
 	set_status_keymap = "<Tab><Tab>",
 	create_task_inside_keymap = "bc",
 	follow_keymap = "bf",
-	symbols = { " - ", " ÷ ", " + ", " ->", "<- ", "---", "(-)" },
-	statuses = { "TODO", "DOING", "DONE", "MIGRATED", "DELEGATED", "DELETED", "IDEA" },
+	open_notes_keymap = "bn",
+	symbols = { " - ", " ÷ ", " + ", " ->", "<- ", "---", "(-)", " * " },
+	statuses = { "TODO", "DOING", "DONE", "MIGRATED", "DELEGATED", "DELETED", "IDEA", "MEETING" },
 	cycle_over_states = { "TODO", "DOING", "DONE" },
 	default_symbol_color = { bold = true, fg = "yellow" },
 	default_line_color = { bold = false, italic = true, fg = "grey" },
@@ -154,9 +155,11 @@ function M.new_task(pars, new)
 		meta = oldmeta
 	end
 	local orig_pars = pars.orig_pars
+	local notes = pars.notes
 	if orig_pars == nil then
 		if meta ~= nil then
 			orig_pars = meta.orig_pars
+			notes = meta.notes
 		end
 	end
 	if meta then
@@ -181,6 +184,7 @@ function M.new_task(pars, new)
 		pars.silent = true
 	end
 	return {
+		notes = notes or nil,
 		silent = pars.silent or false,
 		indent = pars.indent or "",
 		status = status,
@@ -194,9 +198,26 @@ function M.new_task(pars, new)
 		line_end = pars.line_end or -1,
 		auto_save = auto_save,
 		auto_close = auto_close,
+		notes_file = function(self)
+			if self.notes then
+				return self.notes
+			end
+			return M.date_file(0, self.value or "meeting")
+		end,
+		open_notes = function(self)
+			local file = self:notes_file()
+
+			local new_buf, buf = M.find_or_create_buffer(file)
+			if new_buf then
+				self:clone({ notes = file }):write()
+			end
+			vim.api.nvim_buf_call(buf, vim.cmd.edit)
+			vim.api.nvim_win_set_buf(0, buf)
+		end,
 		tostring = function(self)
 			local meta = self.meta
 			meta.orig_pars = self.orig_pars
+			meta.notes = self.notes
 			return self.indent .. self.symbol .. "\t" .. self.value .. "\t\t" .. vim.json.encode(self.meta)
 		end,
 		next = function(self)
@@ -205,8 +226,8 @@ function M.new_task(pars, new)
 			if new_status == nil then
 				return
 			end
-			_meta.changes = _meta.changes or {}
-			table.insert(_meta.changes, { time = os.time(), from = self.status, to = new_status })
+			-- _meta.changes = _meta.changes or {}
+			-- table.insert(_meta.changes, { time = os.time(), from = self.status, to = new_status })
 			return self:clone({ status = new_status, meta = _meta })
 		end,
 		previous = function(self)
@@ -215,8 +236,8 @@ function M.new_task(pars, new)
 			if new_status == nil then
 				return
 			end
-			_meta.changes = _meta.changes or {}
-			table.insert(_meta.changes, { time = os.time(), from = self.status, to = new_status })
+			-- _meta.changes = _meta.changes or {}
+			-- table.insert(_meta.changes, { time = os.time(), from = self.status, to = new_status })
 			return self:clone({ status = new_status, meta = _meta })
 		end,
 		buffer_is_opened = function(self)
@@ -301,9 +322,16 @@ function M.new_task(pars, new)
 	}
 end
 
-function M.date_file(days)
+function M.date_file(days, complement)
+	if complement == nil then
+		complement = ""
+	else
+		complement = "-" .. complement:gsub("%W", "_")
+	end
 	return vim.fn.resolve(
-		vim.fn.expand(os.date(M.opts.path .. "/%Y-%m-%d.bujo", os.time() + ((days or 0) * 24 * 60 * 60)))
+		vim.fn.expand(
+			os.date(M.opts.path .. "/%Y-%m-%d" .. complement .. ".bujo", os.time() + ((days or 0) * 24 * 60 * 60))
+		)
 	)
 end
 
@@ -359,10 +387,10 @@ end
 function M.set_status(status)
 	local task = M.task_from_line(vim.api.nvim_get_current_line())
 	local meta = task.meta or {}
-	if meta.changes == nil then
-		meta.changes = {}
-	end
-	table.insert(meta.changes, { time = os.time(), from = task.status, to = status })
+	-- if meta.changes == nil then
+	-- 	meta.changes = {}
+	-- end
+	-- table.insert(meta.changes, { time = os.time(), from = task.status, to = status })
 	local new = task:clone({ status = status, meta = meta })
 
 	vim.api.nvim_set_current_line(new:tostring())

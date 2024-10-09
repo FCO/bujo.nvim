@@ -22,7 +22,7 @@ for symbol, status in pairs(bujo.sym2st) do
 	vim.cmd.syntax(
 		"match",
 		"BujoBullet" .. status,
-		"/^\\s*" .. symbol .. "/ containedin=BujoLine contained nextgroup=BujoValue"
+		"/^\\s*" .. symbol:gsub("%*", "\\*") .. "/ containedin=BujoLine contained nextgroup=BujoValue"
 	)
 end
 
@@ -50,6 +50,10 @@ vim.api.nvim_buf_create_user_command(0, "BujoCurrentTask", function()
 	print(vim.inspect(bujo.task_from_line(vim.api.nvim_get_current_line())))
 end, { bang = true })
 
+vim.api.nvim_buf_create_user_command(0, "BujoOpenNotes", function()
+	bujo.task_from_line(vim.api.nvim_get_current_line()):open_notes()
+end, { bang = true })
+
 vim.api.nvim_buf_create_user_command(0, "BujoFollowOrigin", function()
 	bujo.task_from_line(vim.api.nvim_get_current_line()):follow()
 end, { bang = true })
@@ -70,7 +74,7 @@ vim.api.nvim_buf_create_user_command(0, "BujoPreviousSymbol", function(args)
 			bujo.replace_symbol(true, 0, line - 1)
 		end
 	else
-		bujo.replace_symbol()
+		bujo.replace_symbol(true)
 	end
 end, { bang = true, range = true })
 
@@ -143,4 +147,12 @@ vim.api.nvim_buf_set_keymap(
 	bujo.opts.follow_keymap,
 	":BujoFollowOrigin<CR>",
 	{ silent = true, noremap = true, desc = "Follow task origin" }
+)
+
+vim.api.nvim_buf_set_keymap(
+	0,
+	"n",
+	bujo.opts.open_notes_keymap,
+	":BujoOpenNotes<CR>",
+	{ silent = true, noremap = true, desc = "Open notes from current task" }
 )
